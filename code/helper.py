@@ -1,4 +1,5 @@
 from common import config, VehicleState
+import numpy as np
 
 class Helper(object):
     """docstring for Helper"""

@@ -5,7 +5,7 @@ class Config(object):
     merging_len = 30.0
     max_acc = 2.5
     size = (3.0, 1.8)
-    delta = 1.0  # safe distance between vehicles
+    delta = 20.0  # safe distance between vehicles
     time_meta = 0.2
     max_sim_time = 100.0
 
@@ -17,7 +17,7 @@ class Config(object):
     case2 = {
         'total_cars': 30,
         'speed': 13.4,
-        'tm_0': 
+        'tm_0': 30.0
     }
 
 
