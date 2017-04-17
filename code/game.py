@@ -27,7 +27,7 @@ class VehicleBuilder(object):
         super(VehicleBuilder, self).__init__()
         self.ID = ID
         self.max_acc = config.max_acc
-        self.max_speed = float('Inf')
+        self.max_speed = config.max_speed
         self.min_speed = 0
         self.size = config.size
 
@@ -53,7 +53,7 @@ class VehicleBuilder(object):
 
 class OnBoardVehicle(object):
     """docstring for OnBoardVehicle"""
-    def __init__(self, vehicle, t0):
+    def __init__(self, vehicle, t0, min_pass_time=config.min_pass_time):
         self.vehicle = vehicle
         self.t0 = t0
         self.tm = float('Inf')
@@ -62,6 +62,7 @@ class OnBoardVehicle(object):
         self.acc_history = [vehicle.acceleration]
         self.time_steps = [t0]
         self.ParaV = None
+        self.min_pass_time = min_pass_time
         self.state = VehicleState.PENDING
 
 
@@ -84,7 +85,7 @@ class VehicleGeneratorBase(metaclass=ABCMeta):
 
     def tmCalculator(self):
         for i, v in enumerate(self.schedule):
-            v.tm = config.case1['tm_0'] if v.vehicle.ID == 0 \
+            v.tm = v.t0 + config.min_pass_time if v.vehicle.ID == 0 \
                 else Helper.getTm(v, self.schedule[i-1])
 
     def hasVehicle(self):
@@ -92,6 +93,11 @@ class VehicleGeneratorBase(metaclass=ABCMeta):
 
     def FIFOIDAssigner(self):
         self.schedule = deque(sorted(self.schedule, key=lambda x:x.t0))
+        for i, ove in enumerate(self.schedule):
+            ove.vehicle.ID = i
+
+    def MainRoadFirstIDAssigner(self):
+        self.schedule = deque(sorted(self.schedule, key=lambda x:(-x.vehicle.lane + 1)*1000 + x.t0))
         for i, ove in enumerate(self.schedule):
             ove.vehicle.ID = i
 
@@ -154,6 +160,31 @@ class Case3VehicleGenerator(VehicleGeneratorBase):
         self.FIFOIDAssigner()
 
 
+class APPVehicleGenerator(VehicleGeneratorBase):
+    def __init__(self, tnum, id_assigner, min_pass_time):
+        self.tnum = tnum
+        self.ida = id_assigner
+        self.mpt = min_pass_time
+        super(APPVehicleGenerator, self).__init__()
+
+    def buildSchedule(self):
+        tnum = self.tnum
+        t0_lane1 = np.random.rand(tnum//2) * 40.0 + 10.0
+        t0_lane2 = np.random.rand(tnum//2) * 40.0 + 10.0
+        for i in range(tnum):
+            v = VehicleBuilder(-1)\
+                .setSpeed(config.case2['speed'])\
+                .setPosition(-config.control_len)\
+                .setAcceleration(0)\
+                .setLane(i % 2).build()
+            t = t0_lane1[i//2] if (i % 2 == 0) else t0_lane2[i//2]
+            self.schedule.append(OnBoardVehicle(v, t, self.mpt))
+        if self.ida == 'FIFO':
+            self.FIFOIDAssigner()
+        elif self.ida == 'main':
+            self.MainRoadFirstIDAssigner()
+
+
 class GameLoop(object):
     """docstring for GameLoop"""
     def __init__(self, vscd):
@@ -177,8 +208,13 @@ class GameLoop(object):
         t = self.ctime
         ove_t = self.vscd.getAtTime(t)
         for v in ove_t:
-            v.tm = config.case1['tm_0'] if v.vehicle.ID == 0 \
-                else Helper.getTm(v, self.on_board_vehicles[-1])
+            # from IPython import embed; embed()
+            if v.vehicle.ID == 0:
+                v.tm = v.t0 + max(config.min_pass_time, v.min_pass_time)
+            elif len(self.on_board_vehicles) > 0:
+                v.tm = Helper.getTm(v, self.on_board_vehicles[-1])
+            else:
+                v.tm = Helper.getTm(v, self.finished_vehicels[-1])
             self.on_board_vehicles.append(v)
             TimeM = Helper.getTimeMatrix(t, v.tm)
             ConfV = Helper.getConfigVec(v)
@@ -245,10 +281,15 @@ class GameLoop(object):
 
 
 def main():
-    vehicle_generator = Case2VehicleGenerator()
-    game = GameLoop(vehicle_generator)
-    game.play()
-    game.draw_result("result.html")
+    # vehicle_generator = Case2VehicleGenerator()
+    # game = GameLoop(vehicle_generator)
+    # game.play()
+    # game.draw_result("result.html")
+
+    vehicle_generator = APPVehicleGenerator(12, 'FIFO', 16.9)
+    ggame = GameLoop(vehicle_generator)
+    ggame.play()
+    ggame.draw_result("result.html")
 
 
 if __name__ == '__main__':
