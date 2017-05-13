@@ -1,6 +1,8 @@
 # Intelligent Vehicle Merging Simulation
 A backup of my graduation project code.
 
+![img](https://farm3.staticflickr.com/2895/34052008416_6529de3a8c_z_d.jpg)
+
 ## Requirement
 * Python3
 * And some fancy packages are required
