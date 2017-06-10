@@ -4,13 +4,15 @@ class Config(object):
     control_len = 400.0
     merging_len = 30.0
     max_acc = 3.0         # maximum acceleration
+    min_acc = -3.0        # minimum acceleration
     max_speed = 30.0      # maximum speed
     min_speed = 5.0
     size = (3.0, 1.8)     # size of the vehicle
     delta = 10.0          # safe distance between vehicles
-    time_meta = 0.1      # time meta for simulation
+    time_meta = 0.02      # time meta for simulation
     max_sim_time = 400.0
     min_pass_time = 0.0
+    speed_merge = 25.0    # desired speed
 
     case1 = {
         'total_cars': 4,

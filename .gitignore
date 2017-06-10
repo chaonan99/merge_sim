@@ -1,3 +1,6 @@
+__pycache__
+.tags*
+.ipynb_checkpoints
 *.html
 *.sublime-project
 *.sublime-workspace

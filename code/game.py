@@ -1,11 +1,17 @@
 from collections import deque
 import numpy as np
+import os
 from abc import ABCMeta, abstractmethod
 import random
 random.seed(42)
 
-# from common import config, VehicleState
-# from helper import Helper
+from common import config, VehicleState
+from helper import Helper
+
+INFO = """Average merging time: {} s
+Traffic flow: {} vehicle/s
+Average speed: {} km/h
+Average fuel consumption: {} ml/vehicle"""
 
 
 class Vehicle(object):
@@ -69,6 +75,14 @@ class OnBoardVehicle(object):
         self.state = VehicleState.PENDING
 
     @property
+    def v0(self):
+        return self.speed_history[0]
+
+    @property
+    def p0(self):
+        return self.position_history[0]
+
+    @property
     def merge_time(self):
         return self.time_steps[-1] - self.time_steps[0]
 
@@ -110,9 +124,9 @@ class VehicleGeneratorBase(metaclass=ABCMeta):
             ove.vehicle.ID = i
 
     def SpeedIDAssigner(self):
-        # self.schedule = deque(sorted(self.schedule, key=lambda x:x.t0 +
-        #     Helper.getTmOptimal2(x.vehicle.speed, config.case_speed['speed_merge'],
-        #         -config.control_len, 0)))
+        for ove in self.schedule:
+            ove.min_pass_time = Helper.getTmOptimal2(ove.v0, config.case_speed['speed_merge'],
+                -config.control_len, 0)
         self.schedule = deque(sorted(self.schedule, key=lambda x:x.t0 + x.min_pass_time))
         for i, ove in enumerate(self.schedule):
             ove.vehicle.ID = i
@@ -131,8 +145,11 @@ class Case1VehicleGenerator(VehicleGeneratorBase):
                 .setPosition(-config.control_len)\
                 .setAcceleration(0)\
                 .setLane(i % 2).build()
-            t = 10.0 if (i < 2) else 12.0
-            self.schedule.append(OnBoardVehicle(v, t, config.control_len / config.case1['speed']))
+            t = 10.0 if (i < 2) else 15.0
+            # self.schedule.append(OnBoardVehicle(v, t, config.control_len / config.case1['speed']))
+            tm = Helper.getTmOptimal2(config.case1['speed'], config.case_speed['speed_merge'],
+                -config.control_len, 0) if i == 0 else 0
+            self.schedule.append(OnBoardVehicle(v, t, tm))
         # self.schedule.sort(key=lambda x: x.vehicle.ID)
 
 
@@ -156,6 +173,34 @@ class Case2VehicleGenerator(VehicleGeneratorBase):
             t = t0_lane0[i//2] if (i % 2 == 0) else t0_lane1[i//2]
             self.schedule.append(OnBoardVehicle(v, t, config.control_len / config.case2['speed']))
         self.FIFOIDAssigner()
+
+
+class MainHigherSpeedVG(VehicleGeneratorBase):
+    def __init__(self):
+        super(MainHigherSpeedVG, self).__init__()
+
+    def buildSchedule(self):
+        # lane0 (main road)
+        t0_lane0 = np.arange(10, 30.1, 2.0)
+        t0_lane1 = np.arange(9, 30.1, 3.1)
+        v0_lane0 = 25.0
+        v0_lane1 = 15.0
+        for ti0 in t0_lane0:
+            v = VehicleBuilder(-1)\
+                .setSpeed(v0_lane0)\
+                .setPosition(-config.control_len)\
+                .setAcceleration(0)\
+                .setLane(0).build()
+            self.schedule.append(OnBoardVehicle(v, ti0, Helper.getTc(v)))
+        for ti0 in t0_lane1:
+            v = VehicleBuilder(-1)\
+                .setSpeed(v0_lane1)\
+                .setPosition(-config.control_len)\
+                .setAcceleration(0)\
+                .setLane(1).build()
+            self.schedule.append(OnBoardVehicle(v, ti0, Helper.getTc(v)))
+        self.FIFOIDAssigner()
+        # self.SpeedIDAssigner()
 
 
 class PoissonVehicleGenerator(VehicleGeneratorBase):
@@ -187,9 +232,7 @@ class PoissonVehicleGenerator(VehicleGeneratorBase):
                 .setAcceleration(0)\
                 .setLane(0).build()
             t = t0_lane0[i]
-            self.schedule.append(OnBoardVehicle(v, t,
-                Helper.getTmOptimal2(speed_v, config.case_speed['speed_merge'],
-                    -config.control_len, 0)))
+            self.schedule.append(OnBoardVehicle(v, t, Helper.getTc(v)))
 
         for i in range(self.tnum_lane1):
             speed_v = speed_lane1 + np.random.randn()
@@ -199,12 +242,10 @@ class PoissonVehicleGenerator(VehicleGeneratorBase):
                 .setAcceleration(0)\
                 .setLane(1).build()
             t = t0_lane1[i]
-            self.schedule.append(OnBoardVehicle(v, t,
-                Helper.getTmOptimal2(speed_v, config.case_speed['speed_merge'],
-                    -config.control_len, 0, 50.0)))
+            self.schedule.append(OnBoardVehicle(v, t, Helper.getTc(v)))
 
-        # self.FIFOIDAssigner()
-        self.SpeedIDAssigner()
+        self.FIFOIDAssigner()
+        # self.SpeedIDAssigner()
 
 
 class APPVehicleGenerator(VehicleGeneratorBase):
@@ -256,7 +297,8 @@ class GameLoop(object):
         ove_t = self.vscd.getAtTime(t)
         for v in ove_t:
             if v.vehicle.ID == 0:
-                v.tm = v.t0 + max(config.min_pass_time, v.min_pass_time)
+                # v.tm = v.t0 + max(config.min_pass_time, v.min_pass_time)
+                v.tm = v.t0 + Helper.getTmOptimal2(v.v0, config.speed_merge, v.p0, 0)
             elif len(self.on_board_vehicles) > 0:
                 v.tm = Helper.getTm(v, self.on_board_vehicles[-1])
             else:
@@ -285,15 +327,68 @@ class GameLoop(object):
         # Measure average merging time
         AMT = np.array([v.merge_time for v in self.finished_vehicels]).mean()
         # Measure traffic flow
-        TF = length(self.finished_vehicels) / (self.finished_vehicels[-1].tf - self.finished_vehicels[0].t0)
+        TF = len(self.finished_vehicels) / (self.finished_vehicels[-1].tf - self.finished_vehicels[0].t0)
         # Measure average speed
         AS = 1 / np.array([1 / v.average_speed for v in self.finished_vehicels]).mean() * 3.6
         # Measure average fuel consumption
         AFC = np.array([v.fuel_consumption for v in self.finished_vehicels]).mean()
-        print("""Average merging time: {} s\n
-            Traffic flow: {} vehicle/s\n
-            Average speed: {} km/h\n
-            Average fuel consumption: {} ml/vehicle""".format(AMT, TF, AS, AFC))
+        print(INFO.format(AMT, TF, AS, AFC))
+
+    def draw_result_pyplot(self, file_path=None):
+        import matplotlib.pyplot as plt
+        plt.figure(1)
+        plt.subplot(221)
+        plt.xlabel('time')
+        plt.ylabel('position')
+        plt.title('positions')
+        for tv in self.finished_vehicels:
+            linecolor = 'r--' if tv.vehicle.lane == 0 else 'b'
+            plt.plot(tv.time_steps, tv.position_history, linecolor,
+                label="Car {}".format(tv.vehicle.ID))
+        plt.grid(True)
+        if file_path:
+            plt.savefig(os.path.join(file_path, "position.pdf"), format="pdf")
+
+        plt.subplot(222)
+        plt.xlabel('time')
+        plt.ylabel('speed')
+        plt.title('speeds')
+        for tv in self.finished_vehicels:
+            linecolor = 'r--' if tv.vehicle.lane == 0 else 'b'
+            plt.plot(tv.time_steps, tv.speed_history, linecolor,
+                label="Car {}".format(tv.vehicle.ID))
+        plt.grid(True)
+        if file_path:
+            plt.savefig(os.path.join(file_path, "speed.pdf"), format="pdf")
+
+        plt.subplot(223)
+        plt.xlabel('time')
+        plt.ylabel('acceleration')
+        plt.title('accelerations')
+        for tv in self.finished_vehicels:
+            linecolor = 'r--' if tv.vehicle.lane == 0 else 'b'
+            plt.plot(tv.time_steps, tv.acc_history, linecolor,
+                label="Car {}".format(tv.vehicle.ID))
+        plt.grid(True)
+        if file_path:
+            plt.savefig(os.path.join(file_path, "acc.pdf"), format="pdf")
+
+        plt.subplot(224)
+        plt.xlabel('time')
+        plt.ylabel('fuel')
+        plt.title('fuels')
+        for tv in self.finished_vehicels:
+            linecolor = 'r--' if tv.vehicle.lane == 0 else 'b'
+            plt.plot(tv.time_steps, tv.fuel_history, linecolor,
+                label="Car {}".format(tv.vehicle.ID))
+        plt.grid(True)
+        if file_path:
+            plt.savefig(os.path.join(file_path, "fuel.pdf"), format="pdf")
+
+        if not file_path:
+            plt.subplots_adjust(top=0.92, bottom=-0.35, left=0.10, right=1.35, hspace=0.35,
+                    wspace=0.35)
+            plt.show()
 
     def draw_result(self, file_path):
         from bokeh.layouts import gridplot
@@ -366,9 +461,9 @@ class SpeedGameLoop(GameLoop):
             tmp_v_stack = []
             while len(self.on_board_vehicles) > 0 and self.on_board_vehicles[-1].vehicle.ID > v.vehicle.ID:
                 tmpv = self.on_board_vehicles.pop()
-                tmpv.t0 = t
-                tmpv.min_pass_time = max(tmpv.min_pass_time, Helper.getTmOptimal2(tmpv.vehicle.speed,
-                    config.case_speed['speed_merge'], tmpv.vehicle.position, 0))
+                # tmpv.t0 = t
+                # tmpv.min_pass_time = max(tmpv.min_pass_time, Helper.getTmOptimal2(tmpv.vehicle.speed,
+                #     config.case_speed['speed_merge'], tmpv.vehicle.position, 0))
                 tmp_v_stack.append(tmpv)
 
             # Get t_m
@@ -391,6 +486,7 @@ class SpeedGameLoop(GameLoop):
                 ve.ParaV = np.dot(np.linalg.inv(TimeM), ConfV)
                 ve.state = VehicleState.ON_RAMP
                 prevve = ve
+                # print("ID {}".format(prevve.vehicle.ID))
 
         for v in self.on_board_vehicles:
             Helper.updateAVP(v, t)
@@ -403,17 +499,24 @@ class SpeedGameLoop(GameLoop):
 
 
 def main():
-    # vehicle_generator = Case2VehicleGenerator()
+    # vehicle_generator = Case1VehicleGenerator()
     # game = GameLoop(vehicle_generator)
     # game.play()
-    # game.draw_result("result.html")
+    # game.draw_result_pyplot("case1")
+
+    vehicle_generator = MainHigherSpeedVG()
+    game = GameLoop(vehicle_generator)
+    # game = SpeedGameLoop(vehicle_generator)
+    game.play()
+    game.draw_result_pyplot("case2")
 
     # vehicle_generator = APPVehicleGenerator(12, 'FIFO', 16.9)
-    vehicle_generator = PoissonVehicleGenerator(config.case_speed['tnum_lane0'],
-        config.case_speed['tnum_lane1'])
-    ggame = SpeedGameLoop(vehicle_generator)
-    ggame.play()
-    ggame.draw_result("result.html")
+    # vehicle_generator = PoissonVehicleGenerator(config.case_speed['tnum_lane0'],
+    #     config.case_speed['tnum_lane1'])
+    # ggame = GameLoop(vehicle_generator)
+    # ggame.play()
+    # # ggame.draw_result("result.html")
+    # ggame.draw_result_pyplot(".")
 
 
 if __name__ == '__main__':
